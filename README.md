@@ -1,130 +1,80 @@
-# 🛡️ BYEVIRUS v3.0
+# LinIOC — Linux Host IoC Scanner & Triage Tool
 
-Scanner de segurança local para Linux, escrito em **Python puro (stdlib)** — sem dependências externas.
+Scanner defensivo de **Indicadores de Comprometimento (IoC)** para hosts Linux. Faz uma triagem local rápida, classifica cada achado por severidade, mapeia para **MITRE ATT&CK** e gera relatórios JSON/TXT prontos para revisão ou automação (CI/CD, cron).
 
-Varre o sistema em busca de indicadores de comprometimento (IoC) e gera relatórios estruturados em **JSON + TXT**, com score de risco e exit codes para automação.
+> Somente biblioteca padrão do Python (≥ 3.8). Uso restrito a sistemas sob sua autorização.
 
----
+## Módulos
 
-## ✨ O que ele detecta
+| Módulo | O que detecta | ATT&CK |
+|---|---|---|
+| `extensions` | Extensões de navegador (Chrome, Brave, Edge, Vivaldi, Opera…) com permissões de alto risco, ponderadas por score | T1176 |
+| `files` | Binários ELF/scripts em `/tmp`, `/dev/shm`, `/var/tmp`, Downloads; regex de reverse shell, download-and-execute, ofuscação; SHA-256 para consulta no VirusTotal | T1059, T1105, T1027, T1564.001 |
+| `ports` | Portas de backdoor/C2 em LISTEN e conexões ESTABLISHED de saída | T1571 |
+| `processes` | Ferramentas ofensivas em execução, netcat em modo listener, binários rodando de `/tmp` ou deletados do disco | T1095, T1588.002, T1036 |
+| `persistence` | `.bashrc`/`.profile`, cron, systemd, autostart, `init.d`, `/etc/ld.so.preload`, `authorized_keys` | T1546.004, T1053.003, T1543.002, T1574.006 |
 
-| Módulo | O que verifica |
-|---|---|
-| 🔌 **Extensões** | Extensões de navegador (Chrome, Brave, Edge, Chromium, Vivaldi, Opera) com permissões perigosas (`cookies`, `passwords`, `webRequest`, acesso a todos os sites, etc.) |
-| 📁 **Arquivos** | Executáveis/scripts em pastas quentes (`/tmp`, `/dev/shm`, Downloads, Desktop), com análise de conteúdo por **regex** e hash **SHA-256** |
-| 🌐 **Portas** | Portas clássicas de backdoor/C2 abertas (4444 Metasploit, 5555 ADB, 31337 Back Orifice, etc.) |
-| ⚙️ **Processos** | Ferramentas de ataque rodando (netcat, msfconsole, mimikatz, hydra, sqlmap, etc.) |
-| 🚀 **Persistência** | Código suspeito em `.bashrc`, `.zshrc`, cron, autostart e **systemd** (unit files e user services) |
+## Como funciona a severidade
 
----
+- Cada regra tem severidade própria (`INFO` → `CRITICAL`) e técnica ATT&CK associada.
+- O **contexto sobe a severidade**: o mesmo padrão em `/tmp` ou em arquivo de persistência pesa mais do que em uma pasta comum.
+- Padrões ambíguos (`base64.b64decode`, `os.system`, portas como 8888/2222) ficam em `LOW`, para reduzir falso positivo.
+- `risk_score` = soma ponderada dos achados; `risk_level` = maior severidade encontrada.
 
-## 🚀 Uso
+## Uso
 
 ```bash
-# Scan completo (relatórios JSON + TXT na pasta atual)
-python3 byevirus_v3.py
-
-# Diretórios extras para varrer
-python3 byevirus_v3.py -d /opt/servidor -d /var/www
-
-# Apenas relatório JSON, salvo em ./relatorios
-python3 byevirus_v3.py -f json -o ./relatorios
-
-# Rodar só alguns módulos
-python3 byevirus_v3.py --modulos portas,processos
-
-# Modo silencioso (só erros)
-python3 byevirus_v3.py -q
+python3 linioc.py                                 # todos os módulos
+python3 linioc.py -m files,persistence -d ~/projetos
+python3 linioc.py -f json -o ./reports --min-severity medium
+sudo python3 linioc.py                            # root: mais visibilidade (processos, cron do sistema)
 ```
 
-### Parâmetros
+Opções principais: `-m` módulos · `-d` diretório extra · `-f txt|json|both` · `--min-severity` · `--fail-on` · `--depth` · `--max-files` · `-q/-v`.
 
-| Flag | Descrição |
-|---|---|
-| `-d, --dir` | Diretório extra para varrer (pode repetir) |
-| `-o, --output` | Pasta onde os relatórios serão salvos (padrão: atual) |
-| `-f, --formato` | `txt`, `json` ou `ambos` (padrão: `ambos`) |
-| `-q, --quiet` | Só log de erro |
-| `--modulos` | `todos` ou lista separada por vírgula: `extensões,arquivos,portas,processos,persistência` |
-
----
-
-## 🔢 Exit codes
+### Exit codes (automação)
 
 | Código | Significado |
 |---|---|
-| `0` | Sistema limpo |
-| `1` | Pelo menos um achado de risco **MEDIO** |
-| `2` | Pelo menos um achado de risco **ALTO/CRÍTICO** |
+| `0` | Limpo (ou abaixo do limiar) |
+| `1` | Achado de severidade média |
+| `2` | Achado alto/crítico (ou `>= --fail-on`) |
 
-Ideal para scripts, cron e CI/CD:
+Exemplo em pipeline:
 
 ```bash
-#!/bin/bash
-python3 byevirus_v3.py -q -o ./relatorios || {
-    echo "⚠️ Ameaças detectadas!" | mail -s "Alerta BYEVIRUS" admin@exemplo.com
-}
+python3 linioc.py -q --fail-on high || echo "Host com IoC de alta severidade"
 ```
 
-Ou no crontab (scan diário às 6h):
+## Exemplo de saída (JSON)
 
-```cron
-0 6 * * * cd /opt/byevirus && python3 byevirus_v3.py -q -o ./relatorios
-```
-
----
-
-## 📊 Saída
-
-**Console:**
-```
-================================================================
-  SCAN COMPLETO em 2.3s — 5 achados | score de risco 14
-  🚨 CRITICO: 1
-  🔴 ALTO: 3
-  🟡 MEDIO: 1
-  📄 relatorios/relatorio_20260914_061500.txt
-  📄 relatorios/relatorio_20260914_061500.json
-================================================================
-```
-
-**JSON** (exemplo de achado):
 ```json
 {
-  "modulo": "arquivos",
-  "severidade": "CRITICO",
-  "titulo": "/tmp/payload.sh",
-  "descricao": ".sh | 2048 bytes | perms 0o777",
-  "metadados": {
-    "sha256": "a94f8b2...",
-    "padroes": ["shell reversa/bind", "conexão de rede via socket"]
-  }
+  "scanner": "LinIOC v4.0.0",
+  "risk_level": "CRITICAL",
+  "mitre_techniques": ["T1059.004", "T1564.001"],
+  "findings": [
+    {
+      "module": "files",
+      "severity": "CRITICAL",
+      "title": "/tmp/.rev.sh",
+      "description": "reverse shell via /dev/tcp; arquivo oculto executavel em diretorio volatil",
+      "mitre": "T1059.004",
+      "metadata": { "sha256": "…", "mode": "0o755" }
+    }
+  ]
 }
 ```
 
-> 💡 **Dica:** copie o `sha256` de qualquer arquivo suspeito e cole em [VirusTotal](https://www.virustotal.com) para verificar se é malware conhecido.
+## Limitações (por design)
 
----
+- É uma ferramenta de **triagem**, não um EDR: não usa assinaturas de malware, YARA nem threat intel em tempo real.
+- Detecção baseada em heurísticas/regex: achados devem ser validados por um analista (ferramentas dual-use como `nmap` ou `tcpdump` são apenas sinalizadas).
+- Sem root, alguns nomes de processo e diretórios de cron ficam ocultos.
 
-## ⚠️ Limitações (seja honesto com você mesmo)
+## Roadmap
 
-- **Não é antivírus nem SIEM.** É um scanner de IoCs estáticos — ele acha *indícios*, não provas.
-- Não remove nada automaticamente. Toda ação de quarentena/remoção é sua decisão.
-- Análise de conteúdo lê no máx. 200 KB por arquivo e é baseada em padrões conhecidos — malware bom se esconde.
-- Roda melhor como root para acessar todos os arquivos, mas também funciona como usuário comum (com cobertura reduzida).
-
----
-
-## 🗺️ Roadmap (ideias para v4)
-
-- [ ] Modo daemon com varredura agendada + banco SQLite histórico
-- [ ] Alertas em tempo real (Telegram / email / webhook)
-- [ ] Correlação de eventos (porta aberta + processo suspeito = CRÍTICO)
-- [ ] Verificação de hashes contra listas públicas (MalwareBazaar)
-- [ ] Quarentena automática opcional
-
----
-
-## 📜 Licença
-
-Código aberto — use, modifique e distribua livremente. Use com responsabilidade, apenas em sistemas que você tem autorização para analisar.
+- [ ] Regras YARA opcionais
+- [ ] Exportação SARIF
+- [ ] Allowlist por hash/caminho
+- [ ] Módulo de SUID/SGID e contas com UID 0
